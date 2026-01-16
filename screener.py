@@ -59,7 +59,7 @@ def run_screener():
     
     # Download data
     try:
-        data = yf.download(tickers, period="3mo", group_by='ticker')
+        data = yf.download(tickers, period="2y", group_by='ticker')
     except Exception as e:
         print(f"YFinance Download Error: {e}")
         return [], []
@@ -70,6 +70,7 @@ def run_screener():
     print("Processing indicators...")
     for ticker in tickers:
         try:
+            print("Trying", ticker)
             # Handle cases where ticker data is missing
             if ticker not in data or data[ticker].empty:
                 continue
