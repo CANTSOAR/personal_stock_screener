@@ -177,6 +177,7 @@ def send_sms(bulls, bears):
         server.quit()
         print(f"SMS sent successfully to {TARGET_PHONE}")
     except Exception as e:
+        print(EMAIL_ADDRESS, EMAIL_PASSWORD, PHONE_NUMBER)
         print(f"Failed to send SMS: {e}")
 
 if __name__ == "__main__":
