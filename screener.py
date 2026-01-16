@@ -18,7 +18,6 @@ PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 
 # Validate credentials
 if not all([EMAIL_ADDRESS, EMAIL_PASSWORD, PHONE_NUMBER]):
-    # We print a warning instead of crashing, so we can see logs if needed
     print("WARNING: Missing environment variables. SMS will fail.")
 
 TARGET_PHONE = f"{PHONE_NUMBER}@vtext.com"
@@ -26,21 +25,15 @@ TARGET_PHONE = f"{PHONE_NUMBER}@vtext.com"
 def get_sp500_tickers():
     """Scrapes S&P 500 tickers from Wikipedia using a fake User-Agent."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    
-    # This header makes Wikipedia think you are a Chrome Browser on Windows
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     
     try:
         response = requests.get(url, headers=headers)
-        response.raise_for_status()  # Check for 403/404 errors
-        
-        # Use StringIO to wrap the text so pandas can read it
+        response.raise_for_status()
         table = pd.read_html(StringIO(response.text))
         df = table[0]
-        
-        # Wiki uses dots (BRK.B) but Yahoo uses dashes (BRK-B)
         tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()
         return tickers
     except Exception as e:
@@ -57,9 +50,9 @@ def run_screener():
 
     print(f"Downloading data for {len(tickers)} stocks...")
     
-    # Download data
     try:
-        data = yf.download(tickers, period="2y", group_by='ticker')
+        # 2y is perfect for accurate RSI convergence
+        data = yf.download(tickers, period="2y", group_by='ticker', progress=False)
     except Exception as e:
         print(f"YFinance Download Error: {e}")
         return [], []
@@ -70,52 +63,58 @@ def run_screener():
     print("Processing indicators...")
     for ticker in tickers:
         try:
-            print("Trying", ticker)
-            # Handle cases where ticker data is missing
             if ticker not in data or data[ticker].empty:
                 continue
             
             df = data[ticker].copy()
-            if len(df) < 50:
+            if len(df) < 200: # Need 200 days for accurate 50 SMA + RSI warmup
                 continue
 
-            # Handle MultiIndex vs Single Index (yfinance versions vary)
+            # --- SAFE DATA EXTRACTION ---
+            # Handles both Series (multi-index) and Scalar values safely
             try:
-                # Try getting scalar values
-                current_price = float(df['Close'].iloc[-1])
-                current_volume = float(df['Volume'].iloc[-1])
-            except:
-                # Fallback for Series extraction
-                current_price = df['Close'].iloc[-1]
-                current_volume = df['Volume'].iloc[-1]
-                # Ensure they are floats not Series
-                if isinstance(current_price, pd.Series): current_price = float(current_price.iloc[0])
-                if isinstance(current_volume, pd.Series): current_volume = float(current_volume.iloc[0])
-            
-            # # Rule: Price under $50
-            # if current_price > 50:
-            #     continue
+                curr_close = df['Close'].iloc[-1]
+                curr_vol = df['Volume'].iloc[-1]
                 
-            # SMAs
-            sma20 = df['Close'].rolling(window=20).mean().iloc[-1]
-            sma50 = df['Close'].rolling(window=50).mean().iloc[-1]
+                # Convert to float if it's a Series, otherwise cast directly
+                current_price = float(curr_close.iloc[0]) if isinstance(curr_close, pd.Series) else float(curr_close)
+                current_volume = float(curr_vol.iloc[0]) if isinstance(curr_vol, pd.Series) else float(curr_vol)
+            except Exception:
+                continue # Skip malformed data
             
-            # Extract scalar if they are series
-            if isinstance(sma20, pd.Series): sma20 = float(sma20.iloc[0])
-            if isinstance(sma50, pd.Series): sma50 = float(sma50.iloc[0])
+            # --- INDICATORS ---
+            
+            # SMAs (Extract as floats)
+            sma20_series = df['Close'].rolling(window=20).mean().iloc[-1]
+            sma50_series = df['Close'].rolling(window=50).mean().iloc[-1]
+            
+            sma20 = float(sma20_series.iloc[0]) if isinstance(sma20_series, pd.Series) else float(sma20_series)
+            sma50 = float(sma50_series.iloc[0]) if isinstance(sma50_series, pd.Series) else float(sma50_series)
 
-            # RSI Calculation
+            # --- CORRECT RSI CALCULATION (Wilder's Smoothing) ---
             delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            current_rsi = rsi.iloc[-1]
-            if isinstance(current_rsi, pd.Series): current_rsi = float(current_rsi.iloc[0])
+            
+            # Separate gains and losses
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            
+            # USE EXPONENTIAL MOVING AVERAGE (Matches Finviz/TradingView)
+            # com=13 is equivalent to alpha=1/14, the standard Wilder's smoothing
+            avg_gain = gain.ewm(com=13, adjust=False).mean()
+            avg_loss = loss.ewm(com=13, adjust=False).mean()
+            
+            rs = avg_gain / avg_loss
+            rsi_series = 100 - (100 / (1 + rs))
+            
+            # Extract final RSI value safely
+            current_rsi_val = rsi_series.iloc[-1]
+            current_rsi = float(current_rsi_val.iloc[0]) if isinstance(current_rsi_val, pd.Series) else float(current_rsi_val)
 
-            # --- BULLISH LOGIC ---
-            # RSI > 40, Price < SMA20 (Dip), Price > SMA50 (Uptrend)
-            if (current_rsi > 40) and (current_price < sma20) and (current_price > sma50):
+            # --- LOGIC WITH BUFFER ---
+            
+            # Bullish: RSI > 40, Price < SMA20 (Dip), Price > SMA50 (Uptrend)
+            # CHANGE: Added * 1.01 to allow stocks that are 1% ABOVE the SMA20 (near misses)
+            if (current_rsi > 40) and (current_price < sma20 * 1.01) and (current_price > sma50):
                 bullish_candidates.append({
                     'Ticker': ticker,
                     'Price': current_price,
@@ -124,9 +123,9 @@ def run_screener():
                     'Setup': 'Bull'
                 })
 
-            # --- BEARISH LOGIC ---
-            # RSI < 60, Price > SMA20 (Rally), Price < SMA50 (Downtrend)
-            if (current_rsi < 60) and (current_price > sma20) and (current_price < sma50):
+            # Bearish: RSI < 60, Price > SMA20 (Rally), Price < SMA50 (Downtrend)
+            # CHANGE: Added * 0.99 to allow stocks that are 1% BELOW the SMA20
+            if (current_rsi < 60) and (current_price > sma20 * 0.99) and (current_price < sma50):
                 bearish_candidates.append({
                     'Ticker': ticker,
                     'Price': current_price,
@@ -138,18 +137,16 @@ def run_screener():
         except Exception:
             continue
 
-    # Sort and slice
+    # Sort by Volume
     bullish_candidates.sort(key=lambda x: x['Vol'], reverse=True)
     bearish_candidates.sort(key=lambda x: x['Vol'], reverse=True)
     
-    return bullish_candidates[:10], bearish_candidates[:10]
+    # Return top 20 since we expect more hits now
+    return bullish_candidates[:20], bearish_candidates[:20]
 
 def send_sms(bulls, bears):
-    # If no credentials, just print and exit
     if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
         print("Skipping SMS: No credentials found.")
-        print(f"Bulls found: {len(bulls)}")
-        print(f"Bears found: {len(bears)}")
         return
 
     msg_body = f"STOCKS REPORT ({datetime.now().strftime('%Y-%m-%d')})\n\n"
@@ -157,12 +154,12 @@ def send_sms(bulls, bears):
     msg_body += "--- CALLS (Dip Buy) ---\n"
     if not bulls: msg_body += "None found.\n"
     for s in bulls:
-        msg_body += f"{s['Ticker']} ${s['Price']:.2f} (Vol: {s['Vol']/1000:.0f}K)\n"
+        msg_body += f"{s['Ticker']} ${s['Price']:.2f} (RSI: {s['RSI']:.0f})\n"
         
     msg_body += "\n--- PUTS (Reject) ---\n"
     if not bears: msg_body += "None found.\n"
     for s in bears:
-        msg_body += f"{s['Ticker']} ${s['Price']:.2f} (Vol: {s['Vol']/1000:.0f}K)\n"
+        msg_body += f"{s['Ticker']} ${s['Price']:.2f} (RSI: {s['RSI']:.0f})\n"
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
