@@ -91,9 +91,9 @@ def run_screener():
                 if isinstance(current_price, pd.Series): current_price = float(current_price.iloc[0])
                 if isinstance(current_volume, pd.Series): current_volume = float(current_volume.iloc[0])
             
-            # Rule: Price under $50
-            if current_price > 50:
-                continue
+            # # Rule: Price under $50
+            # if current_price > 50:
+            #     continue
                 
             # SMAs
             sma20 = df['Close'].rolling(window=20).mean().iloc[-1]
