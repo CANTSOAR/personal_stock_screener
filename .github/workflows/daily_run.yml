@@ -17,7 +17,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install yfinance pandas lxml python-dotenv
+          pip install yfinance pandas lxml python-dotenv requests
       
       - name: Run script
         env: 
