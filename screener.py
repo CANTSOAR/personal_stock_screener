@@ -59,7 +59,7 @@ def run_screener():
     
     # Download data
     try:
-        data = yf.download(tickers, period="3mo", group_by='ticker', progress=False)
+        data = yf.download(tickers, period="3mo", group_by='ticker')
     except Exception as e:
         print(f"YFinance Download Error: {e}")
         return [], []
