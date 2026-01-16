@@ -1,0 +1,28 @@
+name: Daily Stock Screener
+
+on:
+  schedule:
+    - cron: '0 15 * * 1-5' # Runs at 10:00 AM EST (15:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  run-screener:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install yfinance pandas lxml python-dotenv
+      
+      - name: Run script
+        env: 
+          # This maps the GitHub Secrets to the Environment Variables the script looks for
+          EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
+        run: python screener.py
