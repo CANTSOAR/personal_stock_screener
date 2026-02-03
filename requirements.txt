@@ -1,0 +1,7 @@
+yfinance
+pandas
+lxml
+python-dotenv
+requests
+setuptools
+wheel
